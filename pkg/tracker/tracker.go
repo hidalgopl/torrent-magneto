@@ -2,21 +2,54 @@ package tracker
 
 import (
 	"encoding/binary"
+	"errors"
 	"math/rand"
 	"net/url"
 	"strings"
 )
 
+const (
+	ActionConnect  = 0
+	ActionAnnounce = 1
+	ActionScrape   = 2
+	ActionError    = 3
+)
+
+type Request interface {
+	Serialize() ([]byte, error)
+}
+
+type Response interface {
+	Deserialize() (interface{}, error)
+}
+
+// ...
 type ConnectReq struct {
-	transactionID uint32
-	action        uint32
-	protocolID    uint64
+	TransactionID uint32
+	Action        uint32
+	ProtocolID    uint64
 }
 
 type ConnectResp struct {
-	action        uint32
-	transactionID uint32
-	connectionID  uint64
+	Action        uint32
+	TransactionID uint32
+	ConnectionID  uint64
+}
+
+type AnnounceReq struct {
+	ConnectionID  uint64
+	Action        uint32
+	TransactionID uint32
+	InfoHash      [20]byte
+	PeerID        [20]byte
+	Downloaded    uint64
+	Left          uint64
+	Uploaded      uint64
+	Event         uint32
+	IPAddress     uint32
+	Key           uint32
+	NumWant       uint32
+	Port          uint16
 }
 
 type ScrapeReq struct {
@@ -26,49 +59,102 @@ type ScrapeReq struct {
 	infoHash      [20]byte
 }
 
-func NewScrapeReq (infoHash [20]byte, connectionID uint64, transactionID uint32) *ScrapeReq {
+type ScrapeResp struct {
+	Action        uint32
+	TransactionID uint32
+	Seeders       uint32
+	Completed     uint32
+	leechers      uint32
+}
+
+type ScrapeRespErr struct {
+	action        uint32
+	transactionID uint32
+	message       string
+}
+
+func NewAnnounceReq(infoHash [20]byte, connectionID uint64) *AnnounceReq {
+	peerID := ""
+	return &AnnounceReq{
+		ConnectionID:  connectionID,
+		Action:        1,
+		TransactionID: rand.Uint32(),
+		InfoHash:      infoHash,
+		PeerID:        bytes(peerID),
+		Downloaded:    0,
+		Left:          0,
+		Uploaded:      0,
+		Event:         0,
+		IPAddress:     0,
+		Key:           0,
+		NumWant:       -1,
+		Port:          0,
+	}
+}
+
+func DeserializeScrapeResp(resp []byte) (interface{}, error) {
+	if len(resp) < 8 {
+		errMsg := "received too small packet " + string(len(resp))
+		return nil, errors.New(errMsg)
+	}
+	action := binary.BigEndian.Uint32(resp[0:4])
+	if action == ActionError {
+		return DeserializeScrapeRespErr(resp)
+	}
+	respBody := &ScrapeResp{
+		Action:        binary.BigEndian.Uint32(resp[0:4]),
+		TransactionID: binary.BigEndian.Uint32(resp[4:8]),
+		Seeders:       binary.BigEndian.Uint32(resp[8:12]),
+		Completed:     binary.BigEndian.Uint32(resp[12:16]),
+		leechers:      binary.BigEndian.Uint32(resp[16:20]),
+	}
+	return respBody, nil
+}
+
+func DeserializeScrapeRespErr(resp []byte) (*ScrapeRespErr, error) {
+	respBody := &ScrapeRespErr{
+		action:        binary.BigEndian.Uint32(resp[0:4]),
+		transactionID: binary.BigEndian.Uint32(resp[4:8]),
+		message:       string(resp[8:]),
+	}
+	return respBody, nil
+}
+
+func NewScrapeReq(infoHash [20]byte, connectionID uint64) *ScrapeReq {
 	return &ScrapeReq{
 		connectionID:  connectionID,
 		action:        2,
-		transactionID: transactionID,
+		transactionID: rand.Uint32(),
 		infoHash:      infoHash,
 	}
 }
 
-
-func (sr *ScrapeReq) Serialize() []byte {
+func (sr *ScrapeReq) Serialize() ([]byte, error) {
 	buf := make([]byte, 36)
 	binary.BigEndian.PutUint64(buf[0:8], sr.connectionID)
 	binary.BigEndian.PutUint32(buf[8:12], sr.action)
 	binary.BigEndian.PutUint32(buf[12:16], sr.transactionID)
 	copy(buf[16:], sr.infoHash[:])
-	return buf
+	return buf, nil
 }
 
 func SerializeConnectResp(resp []byte) *ConnectResp {
 	return &ConnectResp{
-		action:        binary.BigEndian.Uint32(resp[0:4]),
-		transactionID: binary.BigEndian.Uint32(resp[4:8]),
-		connectionID:  binary.BigEndian.Uint64(resp[8:16]),
+		Action:        binary.BigEndian.Uint32(resp[0:4]),
+		TransactionID: binary.BigEndian.Uint32(resp[4:8]),
+		ConnectionID:  binary.BigEndian.Uint64(resp[8:16]),
 	}
 }
 
-func newConnectReq() (*ConnectReq, error) {
+func NewConnectReq() (*ConnectReq, error) {
 	transactionID := rand.Uint32()
 	var action uint32 = 0
 	var protocolID uint64 = 0x41727101980
 	return &ConnectReq{
-		transactionID: transactionID,
-		action:        action,
-		protocolID:    protocolID,
+		TransactionID: transactionID,
+		Action:        action,
+		ProtocolID:    protocolID,
 	}, nil
-}
-
-type Urn struct {
-	btih Xt
-}
-type Xt struct {
-	btih string
 }
 
 type ParsedMagnet struct {
@@ -77,13 +163,14 @@ type ParsedMagnet struct {
 	Xt []string
 }
 
-func (pm *ParsedMagnet) getInfoHash() [20]byte {
+func (pm *ParsedMagnet) GetInfoHash() [20]byte {
 	urn := strings.Split(pm.Xt[0], ":")[2]
 	urnByte := [20]byte{}
 	copy(urnByte[:], urn)
 	return urnByte
 }
 
+// ParseMagnetLink ...
 func ParseMagnetLink(magnetLink string) (*ParsedMagnet, error) {
 	u, err := url.Parse(magnetLink)
 	if err != nil {
@@ -100,10 +187,10 @@ func ParseMagnetLink(magnetLink string) (*ParsedMagnet, error) {
 	}, nil
 }
 
-func (c *ConnectReq) Serialize() []byte {
+func (c *ConnectReq) Serialize() ([]byte, error) {
 	buf := make([]byte, 16)
-	binary.BigEndian.PutUint64(buf[0:8], c.protocolID)
-	binary.BigEndian.PutUint32(buf[8:12], c.action)
-	binary.BigEndian.PutUint32(buf[12:16], c.transactionID)
-	return buf
+	binary.BigEndian.PutUint64(buf[0:8], c.ProtocolID)
+	binary.BigEndian.PutUint32(buf[8:12], c.Action)
+	binary.BigEndian.PutUint32(buf[12:16], c.TransactionID)
+	return buf, nil
 }
