@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"math/rand"
+	"net"
 	"net/url"
 	"strings"
 )
@@ -52,6 +53,16 @@ type AnnounceReq struct {
 	Port          uint16
 }
 
+type AnnounceResp struct {
+	Action        uint32
+	TransactionID uint32
+	Interval      uint32
+	Leechers      uint32
+	Seeders       uint32
+	IPAddress     uint32
+	TCPPort       uint16
+}
+
 type ScrapeReq struct {
 	connectionID  uint64
 	action        uint32
@@ -74,22 +85,62 @@ type ScrapeRespErr struct {
 }
 
 func NewAnnounceReq(infoHash [20]byte, connectionID uint64) *AnnounceReq {
-	peerID := ""
+	peerID := "-BJN-s3xfj3ksloweisj"
+	var peerIDbytes [20]byte
+	copy(peerIDbytes[:], peerID)
 	return &AnnounceReq{
 		ConnectionID:  connectionID,
 		Action:        1,
 		TransactionID: rand.Uint32(),
 		InfoHash:      infoHash,
-		PeerID:        bytes(peerID),
+		PeerID:        peerIDbytes,
 		Downloaded:    0,
 		Left:          0,
 		Uploaded:      0,
 		Event:         0,
 		IPAddress:     0,
 		Key:           0,
-		NumWant:       -1,
+		NumWant:       1,
 		Port:          0,
 	}
+}
+
+func (aq *AnnounceReq) Serialize() ([]byte, error) {
+	buf := make([]byte, 98)
+	binary.BigEndian.PutUint64(buf[0:8], aq.ConnectionID)
+	binary.BigEndian.PutUint32(buf[8:12], aq.Action)
+	binary.BigEndian.PutUint32(buf[12:16], aq.TransactionID)
+	copy(buf[16:36], aq.InfoHash[:])
+	copy(buf[36:56], aq.PeerID[:])
+	binary.BigEndian.PutUint64(buf[56:64], aq.Downloaded)
+	binary.BigEndian.PutUint64(buf[64:72], aq.Left)
+	binary.BigEndian.PutUint64(buf[72:80], aq.Uploaded)
+	binary.BigEndian.PutUint32(buf[80:84], aq.Event)
+	binary.BigEndian.PutUint32(buf[84:88], aq.IPAddress)
+	binary.BigEndian.PutUint32(buf[88:92], aq.Key)
+	binary.BigEndian.PutUint32(buf[92:96], aq.NumWant)
+	binary.BigEndian.PutUint16(buf[96:98], aq.Port)
+
+	return buf, nil
+}
+
+func DeserializeAnnounceResp(resp []byte) (*AnnounceResp, error) {
+	respBody := &AnnounceResp{
+		Action:        binary.BigEndian.Uint32(resp[0:4]),
+		TransactionID: binary.BigEndian.Uint32(resp[4:8]),
+		Interval:      binary.BigEndian.Uint32(resp[8:12]),
+		Leechers:      binary.BigEndian.Uint32(resp[12:16]),
+		Seeders:       binary.BigEndian.Uint32(resp[16:20]),
+		IPAddress:     binary.BigEndian.Uint32(resp[20:24]),
+		TCPPort:       binary.BigEndian.Uint16(resp[24:26]),
+	}
+	return respBody, nil
+}
+
+func (ar *AnnounceResp)GetIPAddress() net.IP {
+	addr := make(net.IP, 4)
+	binary.BigEndian.PutUint32(addr, ar.IPAddress)
+	return addr
 }
 
 func DeserializeScrapeResp(resp []byte) (interface{}, error) {

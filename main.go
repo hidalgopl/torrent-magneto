@@ -68,6 +68,20 @@ func main() {
 		fmt.Printf("action: %v, transactionID: %v, connectionID: %v \n",
 			connectRsp.Action, connectRsp.TransactionID, connectRsp.ConnectionID)
 
+		// Announce
+		announceReq := tracker.NewAnnounceReq(pm.GetInfoHash(), connectRsp.ConnectionID)
+		req, err = announceReq.Serialize()
+		_, err = c.Write(req)
+		if err != nil {
+			fmt.Println(err)
+		}
+		buffAnounce := make([]byte, 26)
+		n, _, err = c.ReadFromUDP(buffAnounce)
+		announceBody, err := tracker.DeserializeAnnounceResp(buffAnounce)
+		fmt.Printf("announce reply: %v \n", announceBody)
+		fmt.Printf("IP address: %v \n", announceBody.GetIPAddress())
+
+		// Scrape
 		scrapeReq := tracker.NewScrapeReq(pm.GetInfoHash(), connectRsp.ConnectionID)
 		req, err = scrapeReq.Serialize()
 		_, err = c.Write(req)
